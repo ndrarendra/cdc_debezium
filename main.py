@@ -17,6 +17,18 @@ cdc_events = []
 # Update this topic to match your Debezium connector configuration.
 topic_name = 'demo_server.demo_db.users'
 
+
+def safe_deserializer(message):
+    """ Safely deserialize a Kafka message. """
+    try:
+        if message is None:
+            return None
+        return json.loads(message.decode('utf-8'))
+    except Exception as e:
+        logging.error("Deserialization error: %s", e)
+        return None
+
+
 def consume_messages():
     consumer = KafkaConsumer(
         topic_name,
@@ -24,38 +36,51 @@ def consume_messages():
         auto_offset_reset='earliest',
         enable_auto_commit=True,
         group_id="flask-consumer-group",
-        value_deserializer=lambda m: json.loads(m.decode('utf-8'))
+        value_deserializer=safe_deserializer
     )
     logging.info("Consumer subscribed to topic: %s", topic_name)
     while True:
-        records = consumer.poll(timeout_ms=5000)
-        if records:
-            for tp, messages in records.items():
-                for message in messages:
-                    logging.info("Received message from topic: %s, partition: %s, offset: %s", 
-                                 message.topic, message.partition, message.offset)
-                    event = {
-                        'topic': message.topic,
-                        'partition': message.partition,
-                        'offset': message.offset,
-                        'data': message.value  # The full CDC event JSON
-                    }
-                    cdc_events.append(event)
-        else:
-            logging.info("No new messages in this cycle.")
+        try:
+            records = consumer.poll(timeout_ms=5000)
+            if records:
+                for tp, messages in records.items():
+                    for message in messages:
+                        if message.value is not None:
+                            logging.info("Received message from topic: %s, partition: %s, offset: %s",
+                                         message.topic, message.partition, message.offset)
+                            logging.info("Raw message content: %s",
+                                         json.dumps(message.value, indent=2))
+                            event = {
+                                'topic': message.topic,
+                                'partition': message.partition,
+                                'offset': message.offset,
+                                'data': message.value
+                            }
+                            cdc_events.append(event)
+                        else:
+                            logging.warning("Received a tombstone (null) message from topic: %s, partition: %s, offset: %s",
+                                            message.topic, message.partition, message.offset)
+            else:
+                logging.info("No new messages in this cycle.")
+        except Exception as e:
+            logging.error("Error during message consumption: %s", e)
         time.sleep(1)
+
 
 # Start consumer in a background thread.
 consumer_thread = threading.Thread(target=consume_messages, daemon=True)
 consumer_thread.start()
 
 # Custom filter: convert millisecond timestamp to a human-readable datetime string.
+
+
 @app.template_filter('timestamp_to_datetime')
 def timestamp_to_datetime(ts):
     try:
         return datetime.datetime.fromtimestamp(ts / 1000.0).strftime('%Y-%m-%d %H:%M:%S')
     except Exception:
         return 'N/A'
+
 
 # HTML template with an extra column "Inserted Data" and a modal popup for details.
 template = """
@@ -66,7 +91,7 @@ template = """
     <!-- Bootstrap CSS for neat design -->
     <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
     <style>
-      pre { margin: 0; font-size: 0.9em; }
+        pre { margin: 0; font-size: 0.9em; }
     </style>
 </head>
 <body>
@@ -93,65 +118,57 @@ template = """
             {% for event in events %}
             <tr>
                 <!-- Operation -->
-                <td>{{ event.data.payload.op if event.data.payload and event.data.payload.op else 'N/A' }}</td>
+                <td>{{ event.data.op if event.data and event.data.op else 'N/A' }}</td>
                 <!-- Topic -->
                 <td>{{ event.topic if event.topic else 'N/A' }}</td>
                 <!-- Partition -->
                 <td>{{ event.partition if event.partition is defined else 'N/A' }}</td>
                 <!-- Offset -->
                 <td>{{ event.offset if event.offset is defined else 'N/A' }}</td>
-                <!-- Database from source -->
-                <td>{{ event.data.payload.source.db if event.data.payload and event.data.payload.source and event.data.payload.source.db else 'N/A' }}</td>
-                <!-- Table from source -->
-                <td>{{ event.data.payload.source.table if event.data.payload and event.data.payload.source and event.data.payload.source.table else 'N/A' }}</td>
-                <!-- Action with human-readable mapping -->
+                <!-- Database -->
+                <td>{{ event.data.source.db if event.data and event.data.source and event.data.source.db else 'N/A' }}</td>
+                <!-- Table -->
+                <td>{{ event.data.source.table if event.data and event.data.source and event.data.source.table else 'N/A' }}</td>
+                <!-- Action -->
                 <td>
-                  {% set op = event.data.payload.op %}
-                  {% if op == 'c' %}
-                    Insert
-                  {% elif op == 'u' %}
-                    Update
-                  {% elif op == 'd' %}
-                    Delete
-                  {% elif op == 'r' %}
-                    Snapshot
-                  {% else %}
-                    {{ op }}
-                  {% endif %}
+                    {% set op = event.data.op if event.data and event.data.op else 'N/A' %}
+                    {% if op == 'c' %}
+                        Insert
+                    {% elif op == 'u' %}
+                        Update
+                    {% elif op == 'd' %}
+                        Delete
+                    {% elif op == 'r' %}
+                        Snapshot
+                    {% else %}
+                        {{ op }}
+                    {% endif %}
                 </td>
                 <!-- Timestamp -->
+                <td>{{ event.data.ts_ms | timestamp_to_datetime if event.data and event.data.ts_ms else 'N/A' }}</td>
+                <!-- User / Source -->
+                <td>{{ event.data.source.connector if event.data and event.data.source and event.data.source.connector else 'N/A' }}</td>
+                <!-- Readable Summary -->
                 <td>
-                  {% if event.data.payload.ts_ms %}
-                    {{ event.data.payload.ts_ms | timestamp_to_datetime }}
-                  {% else %}
-                    N/A
-                  {% endif %}
+                    {% if event.data.after %}
+                        ID: {{ event.data.after.id }},
+                        Name: {{ event.data.after.name }},
+                        Email: {{ event.data.after.email }}
+                    {% else %}
+                        N/A
+                    {% endif %}
                 </td>
-                <!-- User / Source info -->
+                <!-- Inserted Data -->
                 <td>
-                  {{ event.data.payload.source.connector if event.data.payload and event.data.payload.source and event.data.payload.source.connector else 'N/A' }}
+                    {% if event.data.after %}
+                        <pre>{{ event.data.after | tojson(indent=2) }}</pre>
+                    {% else %}
+                        N/A
+                    {% endif %}
                 </td>
-                <!-- Readable Summary Column: display key details if available -->
+                <!-- Details Button -->
                 <td>
-                  {% if event.data.payload.after %}
-                    ID: {{ event.data.payload.after.id }}, 
-                    Name: {{ event.data.payload.after.name }}, 
-                    Email: {{ event.data.payload.after.email }}
-                  {% else %}
-                    N/A
-                  {% endif %}
-                </td>
-                <!-- Inserted Data Column: full pretty-printed JSON from "after" -->
-                <td>
-                  {% if event.data.payload.after %}
-                    <pre>{{ event.data.payload.after | tojson(indent=2) }}</pre>
-                  {% else %}
-                    N/A
-                  {% endif %}
-                </td>
-                <!-- Details button triggers modal popup -->
-                <td>
-                  <button class="btn btn-primary btn-sm" onclick='showDetails({{ event.data | tojson }})'>View</button>
+                    <button class="btn btn-primary btn-sm" onclick='showDetails({{ event.data | tojson }})'>View</button>
                 </td>
             </tr>
             {% endfor %}
@@ -160,49 +177,46 @@ template = """
   </div>
 
   <!-- Modal Popup for detailed JSON -->
-  <div class="modal fade" id="detailsModal" tabindex="-1" role="dialog" aria-labelledby="detailsModalLabel" aria-hidden="true">
+  <div class="modal fade" id="detailsModal" tabindex="-1" role="dialog">
     <div class="modal-dialog modal-lg" role="document">
       <div class="modal-content">
         <div class="modal-header">
-          <h5 class="modal-title" id="detailsModalLabel">Event Details</h5>
-          <button type="button" class="close" data-dismiss="modal" aria-label="Close">
-            <span aria-hidden="true">&times;</span>
-          </button>
+          <h5 class="modal-title">Event Details</h5>
+          <button type="button" class="close" data-dismiss="modal">&times;</button>
         </div>
         <div class="modal-body">
           <pre id="modalContent"></pre>
         </div>
         <div class="modal-footer">
-          <small class="text-muted">Connector Version: <span id="connectorVersion">N/A</span></small>
           <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
         </div>
       </div>
     </div>
   </div>
 
-  <!-- Include jQuery and Bootstrap JS for modal functionality -->
+  <!-- Scripts for modal functionality -->
   <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.1/dist/umd/popper.min.js"></script>
   <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
   <script>
     function showDetails(data) {
-      document.getElementById('modalContent').textContent = JSON.stringify(data, null, 2);
-      var version = (data.payload && data.payload.source && data.payload.source.version) ? data.payload.source.version : 'N/A';
-      document.getElementById('connectorVersion').textContent = version;
-      $('#detailsModal').modal('show');
+        document.getElementById('modalContent').textContent = JSON.stringify(data, null, 2);
+        $('#detailsModal').modal('show');
     }
   </script>
 </body>
 </html>
 """
 
+
 @app.route("/")
 def index():
     return render_template_string(template, events=cdc_events)
 
+
 @app.route("/api/events")
 def api_events():
     return jsonify(cdc_events)
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
