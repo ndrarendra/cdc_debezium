@@ -7,7 +7,7 @@ Install docker
 
 Add Connector to Debezium 
 Windows CMD
-- curl -X POST -H "Content-Type: application/json" -d "{\"name\":\"demo-mysql-connector\",\"config\":{\"connector.class\":\"io.debezium.connector.mysql.MySqlConnector\",\"database.hostname\":\"mysql_db\",\"database.port\":\"3306\",\"database.user\":\"demo\",\"database.password\":\"demo\",\"database.server.name\":\"demo_server\",\"database.include.list\":\"demo_db\",\"table.include.list\":\"demo_db.users\",\"database.server.id\":\"1234\",\"include.schema.changes\":\"true\",\"topic.prefix\":\"demo_server\",\"snapshot.mode\":\"initial\",\"schema.history.internal.kafka.bootstrap.servers\":\"kafka:9092\",\"schema.history.internal.kafka.topic\":\"schema-changes.demo_db\"}}" http://localhost:8083/connectors
+- curl -X POST http://localhost:8083/connectors -H "Content-Type: application/json" -d @connector-config.json
 
 Check if the Connection are Connected to the Debezium
 - curl http://localhost:8083/connectors/demo-mysql-connector/status
