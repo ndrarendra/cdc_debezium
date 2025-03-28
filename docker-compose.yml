@@ -79,7 +79,7 @@ services:
       - connect
 
   consumer:
-    build: .
+    build: ./consumer
     container_name: consumer
     ports:
       - "5000:5000"

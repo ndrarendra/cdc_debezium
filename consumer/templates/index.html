@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>CDC Event Viewer</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <style>
+        pre { margin: 0; font-size: 0.9em; }
+    </style>
+</head>
+<body>
+<div class="container mt-4">
+    <h1>CDC Event Viewer</h1>
+
+    <!-- Filter Form -->
+    <form class="form-inline mb-3">
+        <input type="text" name="database" class="form-control mr-2" placeholder="Database">
+        <input type="text" name="table" class="form-control mr-2" placeholder="Table">
+        <select name="op" class="form-control mr-2">
+            <option value="">Operation</option>
+            <option value="c">Insert</option>
+            <option value="u">Update</option>
+            <option value="d">Delete</option>
+        </select>
+        <button type="submit" class="btn btn-primary">Filter</button>
+    </form>
+
+    <table class="table table-striped table-bordered">
+        <thead>
+            <tr>
+                <th>Operation</th>
+                <th>Topic</th>
+                <th>Partition</th>
+                <th>Offset</th>
+                <th>Database</th>
+                <th>Table</th>
+                <th>Timestamp</th>
+                <th>Data</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for event in events %}
+            <tr>
+                <td>
+                    {% if event.op == 'c' %}
+                        Insert
+                    {% elif event.op == 'u' %}
+                        Update
+                    {% elif event.op == 'd' %}
+                        Delete
+                    {% else %}
+                        {{ event.op }}
+                    {% endif %}
+                </td>
+                <td>{{ event.topic }}</td>
+                <td>{{ event.partition }}</td>
+                <td>{{ event.offset }}</td>
+                <td>{{ event.database }}</td>
+                <td>{{ event.table }}</td>
+                <td>{{ event.ts_ms | format_ts }}</td>
+                <td><pre>{{ event.data | tojson(indent=2) }}</pre></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+<script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+</body>
+</html>
